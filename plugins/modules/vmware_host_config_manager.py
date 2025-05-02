@@ -37,6 +37,12 @@ options:
     - Note that the list of advanced options (with description and values) can be found by running `vim-cmd hostsvc/advopt/options`.
     default: {}
     type: dict
+  force:
+    description:
+    - If set to C(True), the module will apply advanced options even if they are not recognized by the host.
+    - If set to C(False), which is the default, the module will fail if an option is not recognized.
+    type: bool
+    default: false
 extends_documentation_fragment:
 - community.vmware.vmware.documentation
 
@@ -74,6 +80,17 @@ EXAMPLES = r'''
         'Annotations.WelcomeMessage': 'Hello World'
         'Config.HostAgent.plugins.solo.enableMob': false
   delegate_to: localhost
+
+- name: Apply custom advanced settings even if not recognized by the host
+  community.vmware.vmware_host_config_manager:
+    hostname: '{{ vcenter_hostname }}'
+    username: '{{ vcenter_username }}'
+    password: '{{ vcenter_password }}'
+    esxi_hostname: '{{ esxi_hostname }}'
+    options:
+        'Config.CustomSetting': 'value'
+    force: true
+  delegate_to: localhost
 '''
 
 RETURN = r'''#
@@ -97,6 +114,7 @@ class VmwareConfigManager(PyVmomi):
         cluster_name = self.params.get('cluster_name', None)
         esxi_host_name = self.params.get('esxi_hostname', None)
         self.options = self.params.get('options', dict())
+        self.force = self.params.get('force', False)
         self.hosts = self.get_all_host_objs(cluster_name=cluster_name, esxi_host_name=esxi_host_name)
 
     def set_host_configuration_facts(self):
@@ -139,7 +157,12 @@ class VmwareConfigManager(PyVmomi):
                         change_option_list.append(vim.option.OptionValue(key=option_key, value=option_value))
                         changed_list.append(option_key)
                 else:  # Don't silently drop unknown options. This prevents typos from falling through the cracks.
-                    self.module.fail_json(msg="Unsupported option %s" % option_key)
+                    if not self.force:
+                        self.module.fail_json(msg="Unsupported option %s. Use 'force: true' to apply anyway." % option_key)
+                    else:
+                        # When force is True, add the option anyway
+                        change_option_list.append(vim.option.OptionValue(key=option_key, value=option_value))
+                        changed_list.append(option_key)
             if change_option_list:
                 if self.module.check_mode:
                     changed_suffix = ' would be changed.'
@@ -173,6 +196,7 @@ def main():
         cluster_name=dict(type='str', required=False),
         esxi_hostname=dict(type='str', required=False),
         options=dict(type='dict', default=dict(), required=False),
+        force=dict(type='bool', default=False, required=False),
     )
 
     module = AnsibleModule(
